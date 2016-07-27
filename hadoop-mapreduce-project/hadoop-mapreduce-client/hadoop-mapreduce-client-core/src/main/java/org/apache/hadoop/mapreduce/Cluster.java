@@ -66,23 +66,7 @@ public class Cluster {
 
   private static ServiceLoader<ClientProtocolProvider> frameworkLoader =
       ServiceLoader.load(ClientProtocolProvider.class);
-  private volatile List<ClientProtocolProvider> providerList = null;
-
-  private void initProviderList() {
-    if (providerList == null) {
-      synchronized (frameworkLoader) {
-        if (providerList == null) {
-          List<ClientProtocolProvider> localProviderList =
-              new ArrayList<ClientProtocolProvider>();
-          for (ClientProtocolProvider provider : frameworkLoader) {
-            localProviderList.add(provider);
-          }
-          providerList = localProviderList;
-        }
-      }
-    }
-  }
-
+  
   static {
     ConfigUtil.loadResources();
   }
@@ -101,42 +85,42 @@ public class Cluster {
   private void initialize(InetSocketAddress jobTrackAddr, Configuration conf)
       throws IOException {
 
-    initProviderList();
-    final IOException initEx = new IOException(
-        "Cannot initialize Cluster. Please check your configuration for "
-            + MRConfig.FRAMEWORK_NAME
-            + " and the correspond server addresses.");
-    for (ClientProtocolProvider provider : providerList) {
-      LOG.debug("Trying ClientProtocolProvider : "
-          + provider.getClass().getName());
-      ClientProtocol clientProtocol = null;
-      try {
-        if (jobTrackAddr == null) {
-          clientProtocol = provider.create(conf);
-        } else {
-          clientProtocol = provider.create(jobTrackAddr, conf);
-        }
+    synchronized (frameworkLoader) {
+      for (ClientProtocolProvider provider : frameworkLoader) {
+        LOG.debug("Trying ClientProtocolProvider : "
+            + provider.getClass().getName());
+        ClientProtocol clientProtocol = null; 
+        try {
+          if (jobTrackAddr == null) {
+            clientProtocol = provider.create(conf);
+          } else {
+            clientProtocol = provider.create(jobTrackAddr, conf);
+          }
 
-        if (clientProtocol != null) {
-          clientProtocolProvider = provider;
-          client = clientProtocol;
-          LOG.debug("Picked " + provider.getClass().getName()
-              + " as the ClientProtocolProvider");
-          break;
-        } else {
-          LOG.debug("Cannot pick " + provider.getClass().getName()
-              + " as the ClientProtocolProvider - returned null protocol");
+          if (clientProtocol != null) {
+            clientProtocolProvider = provider;
+            client = clientProtocol;
+            LOG.debug("Picked " + provider.getClass().getName()
+                + " as the ClientProtocolProvider");
+            break;
+          }
+          else {
+            LOG.debug("Cannot pick " + provider.getClass().getName()
+                + " as the ClientProtocolProvider - returned null protocol");
+          }
+        } 
+        catch (Exception e) {
+          LOG.info("Failed to use " + provider.getClass().getName()
+              + " due to error: ", e);
         }
-      } catch (Exception e) {
-        final String errMsg = "Failed to use " + provider.getClass().getName()
-            + " due to error: ";
-        initEx.addSuppressed(new IOException(errMsg, e));
-        LOG.info(errMsg, e);
       }
     }
 
     if (null == clientProtocolProvider || null == client) {
-      throw initEx;
+      throw new IOException(
+          "Cannot initialize Cluster. Please check your configuration for "
+              + MRConfig.FRAMEWORK_NAME
+              + " and the correspond server addresses.");
     }
   }
 
@@ -199,15 +183,15 @@ public class Cluster {
   public Job getJob(JobID jobId) throws IOException, InterruptedException {
     JobStatus status = client.getJobStatus(jobId);
     if (status != null) {
-      final JobConf conf = new JobConf();
-      final Path jobPath = new Path(client.getFilesystemName(),
-          status.getJobFile());
-      final FileSystem fs = FileSystem.get(jobPath.toUri(), getConf());
+      JobConf conf;
       try {
-        conf.addResource(fs.open(jobPath), jobPath.toString());
-      } catch (FileNotFoundException fnf) {
-        if (LOG.isWarnEnabled()) {
-          LOG.warn("Job conf missing on cluster", fnf);
+        conf = new JobConf(status.getJobFile());
+      } catch (RuntimeException ex) {
+        // If job file doesn't exist it means we can't find the job
+        if (ex.getCause() instanceof FileNotFoundException) {
+          return null;
+        } else {
+          throw ex;
         }
       }
       return Job.getInstance(this, status, conf);
