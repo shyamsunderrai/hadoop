@@ -87,6 +87,8 @@ public class Cluster {
 
     synchronized (frameworkLoader) {
       for (ClientProtocolProvider provider : frameworkLoader) {
+        LOG.info("CUSTOM-SAM: Value for jobTrackAddr is: " jobTrackAddr);
+        LOG.info("CUSTOM-SAM: Value for conf is: " conf);
         LOG.debug("Trying ClientProtocolProvider : "
             + provider.getClass().getName());
         ClientProtocol clientProtocol = null; 
